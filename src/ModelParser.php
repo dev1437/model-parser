@@ -3,7 +3,6 @@
 namespace Dev1437\ModelParser;
 
 use Exception;
-use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use ReflectionEnum;
 use ReflectionFunction;
@@ -42,9 +41,9 @@ class ModelParser
                 $outputCasts[$key]['casted_as'] = 'primitive';
                 continue;
             }
+            
             $reflection = (new ReflectionClass($value));
 
-            // // if not an enum or already imported skip
             if (!$reflection->isEnum()) {
                 $outputCasts[$key]['type'] = $value;
                 $outputCasts[$key]['casted_as'] = 'class';
@@ -74,7 +73,7 @@ class ModelParser
 
         $camelMutators = [];
         foreach ($mutators as $value) {
-            $camelMutators[$this->camelize($value)] = $value;
+            $camelMutators[str_replace('_', '', lcfirst(ucwords($value, '_')))] = $value;
         }
 
         $outputMutators = [];
@@ -88,7 +87,7 @@ class ModelParser
             $attr = call_user_func($method->getClosure($this->modelInstance));
 
             if (is_null($attr->get)) {
-                throw new Exception("Model for table {$this->modelInstance->getTable()} is using new mutator: {$mutator}.");
+                throw new Exception("ModelParser only supports new style Mutators. {$mutator} returned null get closure.");
             }
 
             $getter = new ReflectionFunction($attr->get);
@@ -101,14 +100,14 @@ class ModelParser
             $outputMutators[$mutator]['type'] = $returnType->getName();
             $outputMutators[$mutator]['nullable'] = $returnType->allowsNull();
 
+            // If the attribute returns an enum, then add enum values in output
             if (!class_exists($returnType->getName())) {
                 continue;
             }
 
-            $reflection = (new ReflectionClass($returnType->getName()));
+            $rc = (new ReflectionClass($returnType->getName()));
 
-            // // if not an enum or already imported skip
-            if (!$reflection->isEnum()) {
+            if (!$rc->isEnum()) {
                 continue;
             }
 
@@ -143,6 +142,7 @@ class ModelParser
         $relations = [];
         $methods = $this->modelReflection->getMethods();
         foreach ($methods as $method) {
+            // Relationships must have a return type to be seen by model parser
             if (!$method->hasReturnType()) {
                 continue;
             }
@@ -153,22 +153,25 @@ class ModelParser
                 continue;
             }
 
-            preg_match('/.*\\\\(.*)/', $returnType, $typeMatches);
+            $relationType = explode('\\', $returnType);
+            $relationType = $relationType[array_key_last($relationType)];
 
             $rc = new ReflectionClass(call_user_func($method->getClosure($this->modelInstance))->getModel());
 
-            preg_match('/.*\\\\(.*)/', $rc->name, $modelMatches);
+            $relatedModel = explode('\\', $rc->name);
+            $relatedModel = $relatedModel[array_key_last($relatedModel)];
+
 
             $relationship = call_user_func($method->getClosure($this->modelInstance));
 
             $relations[$method->getName()] = [
-                'type' => $typeMatches[1],
-                'model' => $modelMatches[1],
-                'keys' => $this->getKeysForRelation($typeMatches[1], $relationship),
+                'type' => $relationType,
+                'model' => $relatedModel,
+                'keys' => $this->getKeysForRelation($relationType, $relationship),
             ];
 
-            if ($typeMatches[1] === 'BelongsToMany' || $typeMatches[1] === 'MorphToMany') {
-                $columns = $this->modelInstance->getConnection()->getSchemaBuilder()->getColumnListing($relationship->getTable());
+            if ($relationType === 'BelongsToMany' || $relationType === 'MorphToMany') {
+                $columns = $this->getColumnList($relationship->getTable());
 
                 $relations[$method->getName()]['pivot'] = [
                     'table' => $relationship->getTable(),
@@ -176,7 +179,7 @@ class ModelParser
                 ];
 
                 foreach ($columns as $column) {
-                    $dbColumn = $this->getTableColumn($this->modelInstance, $column, $relationship->getTable());
+                    $dbColumn = $this->getTableColumn($relationship->getTable(), $column);
                     $type = $dbColumn->getType()->getName();
                     $nullable = $dbColumn->getNotNull();
                     $relations[$method->getName()]['pivot']['columns'][$column] = [
@@ -248,7 +251,7 @@ class ModelParser
     {
         $columns = [];
 
-        foreach ($this->getColumnList() as $column) {
+        foreach ($this->getColumnList($this->modelInstance->getTable()) as $column) {
             $columns[$column] = [];
         }
 
@@ -269,8 +272,10 @@ class ModelParser
         }
 
         foreach ($columns as $column => $properties) {
-            $type = $this->getTableColumn($this->modelInstance, $column)->getType()->getName();
-            $nullable = !$this->getTableColumn($this->modelInstance, $column)->getNotnull();
+            $tableColumn = $this->getTableColumn($this->modelInstance->getTable(), $column);
+
+            $type = $tableColumn->getType()->getName();
+            $nullable = !$tableColumn->getNotnull();
             $columns[$column]['type'] = $type;
             $columns[$column]['nullable'] = $nullable;
         }
@@ -278,22 +283,13 @@ class ModelParser
         return $columns;
     }
 
-    private function getTableColumn($model, $column, $table = null)
+    private function getTableColumn($table, $column)
     {
-        // if ($table === "taggables") {
-        //     var_dump($model->getConnection()->getSchemaBuilder()->getColumnListing('taggables'));
-        //     dd($model->getConnection()->getDoctrineColumn('taggables', 'tag_id'));
-        // }
-        return $model->getConnection()->getDoctrineColumn($table ?? $model->getTable(), $column);
+        return $this->modelInstance->getConnection()->getDoctrineColumn($table, $column);
     }
 
-    private function getColumnList(): array
+    private function getColumnList($table): array
     {
-        return $this->modelInstance->getConnection()->getSchemaBuilder()->getColumnListing($this->modelInstance->getTable());
-    }
-
-    private function camelize($input): string
-    {
-        return str_replace('_', '', lcfirst(ucwords($input, '_')));
+        return $this->modelInstance->getConnection()->getSchemaBuilder()->getColumnListing($table);
     }
 }
