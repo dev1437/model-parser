@@ -185,26 +185,6 @@ class ModelParser
                     ];
                 }
             }
-
-            // if ($typeMatches[1] === 'MorphToMany') {
-            //     $columns = $this->modelInstance->getConnection()->getSchemaBuilder()->getColumnListing($relationship->getTable());
-
-            //     $relations[$method->getName()]['pivot'] = [
-            //         'table' => $relationship->getTable(),
-            //         'columns' => [],
-            //     ];
-
-            //     foreach ($columns as $column) {
-                    
-            //         $dbColumn = $this->getTableColumn($this->modelInstance, $column, $relationship->getTable());
-            //         $type = $dbColumn->getType()->getName();
-            //         $nullable = $dbColumn->getNotNull();
-            //         $relations[$method->getName()]['pivot']['columns'][$column] = [
-            //             'type' => $type,
-            //             'nullable' => $nullable,
-            //         ];
-            //     }
-            // }
         }
 
         return $relations;
